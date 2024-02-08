@@ -53,28 +53,63 @@ impl fmt::Display for Piece {
     }
 }
 
-struct Board([[Piece; 8]; 8]);
-
-impl Board {
-    fn new(init_arr: [[(Color, PieceType); 8]; 8]) -> Board {
-        Board(init_arr.map(|row| row.map(|cell| Piece::new(cell.0, cell.1))))
-    }
-    // fn new(init_arr: [[(Color, PieceType); 8]; 8]) -> Board {
-    //     let mut new_board = Board([[Piece::new(Color::White, PieceType::Pawn); 8]; 8]);
-    //     for i in 0..8 {
-    //         for j in 0..8 {
-    //             new_board.0[i][j] = Piece::new(init_arr[i][j].0, init_arr[i][j].1)
-    //         }
-    //     }
-    //     new_board
-    // }
+struct BoardPosition {
+    board: [[Piece; 8]; 8],
+    en_passante: Option<(i32, i32)>,
+    children: Vec<BoardPosition>,
 }
 
-// impl fmt::Display for Board {
-//     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//          #write!(f, "{}", self.character())
-//     }
-// }
+impl BoardPosition {
+    fn new(
+        init_arr: [[(Color, PieceType); 8]; 8],
+        en_passante: Option<(i32, i32)>,
+    ) -> BoardPosition {
+        BoardPosition {
+            board: init_arr.map(|row| row.map(|cell| Piece::new(cell.0, cell.1))),
+            en_passante,
+            children: Vec::new(),
+        }
+    }
+}
+
+impl fmt::Display for BoardPosition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let board_string = self
+            .board
+            .iter()
+            .enumerate()
+            .fold(String::new(), |str, (i, row)| {
+                format!(
+                    "{}{}\x1b[40m\n",
+                    str,
+                    row.iter()
+                        .enumerate()
+                        .fold(String::new(), |str, (j, piece)| {
+                            format!(
+                                "{}{} {} ",
+                                str,
+                                if (j + i) % 2 == 0 {
+                                    "\x1b[40m"
+                                } else {
+                                    "\x1b[41m"
+                                },
+                                piece.character()
+                            )
+                        }),
+                )
+            });
+        write!(
+            f,
+            "{}En Passante: {}",
+            board_string,
+            if self.en_passante.is_none() {
+                "No Eligible Pawns"
+            } else {
+                "Pawn Eligible"
+            }
+        )
+    }
+}
 
 //#[allow(nonstandard_style())]
 #[rustfmt::skip]
@@ -90,6 +125,6 @@ const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
 ];
 fn main() {
     let piece = Piece::new(White, Pawn);
-    let init_board = Board::new(INITIAL_BOARD);
-    println!("{}", init_board.0[0][0]);
+    let init_position = BoardPosition::new(INITIAL_BOARD, None);
+    println!("{}", init_position);
 }
