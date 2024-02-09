@@ -111,7 +111,6 @@ impl fmt::Display for BoardPosition {
     }
 }
 
-//#[allow(nonstandard_style())]
 #[rustfmt::skip]
 const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
     [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
