@@ -24,6 +24,12 @@ struct Piece {
     color: Color,
     piece_type: PieceType,
 }
+#[derive(Clone)]
+struct BoardPosition {
+    board: [[Piece; 8]; 8],
+    en_passante: Option<(i32, i32)>,
+    children: Vec<BoardPosition>,
+}
 impl Piece {
     fn new(color: Color, piece_type: PieceType) -> Piece {
         Piece { color, piece_type }
@@ -45,18 +51,29 @@ impl Piece {
             (_, Empty) => ' ',
         }
     }
+    fn point_value(&self) -> i32 {
+        match &self.piece_type {
+            Pawn => 1,
+            Knight => 3,
+            Bishop => 3,
+            Rook => 5,
+            Queen => 9,
+            King => 10000,
+            Empty => 0,
+        }
+    }
+
+    fn possible_moves(&self, mut position: &BoardPosition) {
+        match &self.piece_type {
+            White => {}
+        }
+    }
 }
 
 impl fmt::Display for Piece {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.character())
     }
-}
-
-struct BoardPosition {
-    board: [[Piece; 8]; 8],
-    en_passante: Option<(i32, i32)>,
-    children: Vec<BoardPosition>,
 }
 
 impl BoardPosition {
