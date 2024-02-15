@@ -1,12 +1,14 @@
-use std::fmt;
+use std::{fmt, usize};
+
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum Color {
     White,
     Black,
 }
+const BOTTOM_SIDE: Color = White;
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum PieceType {
     Pawn,
     Knight,
@@ -30,6 +32,7 @@ struct BoardPosition {
     en_passante: Option<(i32, i32)>,
     children: Vec<BoardPosition>,
 }
+
 impl Piece {
     fn new(color: Color, piece_type: PieceType) -> Piece {
         Piece { color, piece_type }
@@ -51,21 +54,29 @@ impl Piece {
             (_, Empty) => ' ',
         }
     }
+    fn forward(&self) -> i32 {
+        if self.color == BOTTOM_SIDE {
+            -1
+        } else {
+            1
+        }
+    }
     fn point_value(&self) -> i32 {
         match &self.piece_type {
             Pawn => 1,
             Knight => 3,
             Bishop => 3,
-            Rook => 5,
+            Rook { .. } => 5,
             Queen => 9,
-            King => 10000,
+            King { .. } => 10000,
             Empty => 0,
         }
     }
 
-    fn possible_moves(&self, mut position: &BoardPosition) {
+    fn possible_moves(&self, x: usize, y: usize, mut position: &BoardPosition) {
         match &self.piece_type {
-            White => {}
+            if(y+self.forward() < 0)
+            Pawn => if (position.get_piece(x, y + self.forward()) == Empty) {},
         }
     }
 }
@@ -86,6 +97,9 @@ impl BoardPosition {
             en_passante,
             children: Vec::new(),
         }
+    }
+    fn get_piece(&self, x: usize, y: usize) -> &Piece {
+        &self.board[y][x]
     }
 }
 
@@ -141,6 +155,17 @@ const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
 ];
 fn main() {
     let piece = Piece::new(White, Pawn);
-    let init_position = BoardPosition::new(INITIAL_BOARD, None);
+    let init_position = match BOTTOM_SIDE {
+        White => BoardPosition::new(INITIAL_BOARD, None),
+        Black => {
+            let mut half_reverse = INITIAL_BOARD.map(|mut row| {
+                row.reverse();
+                row
+            });
+            half_reverse.reverse();
+            BoardPosition::new(half_reverse, None)
+        }
+    };
+
     println!("{}", init_position);
 }
