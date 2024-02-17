@@ -18,6 +18,53 @@ enum PieceType {
     Queen,
     Empty,
 }
+struct CoordinateSet {
+    x: i32,
+    y: i32,
+}
+struct Direction {
+    x: i32,
+    y: i32,
+}
+impl Direction {
+    const LEFT: Direction = Direction { x: -1, y: 1 };
+}
+const BOUNDS: (i32, i32) = (0, 7);
+impl CoordinateSet {
+    fn out_of_bounds(&self) -> bool {
+        self.x < BOUNDS.0 || self.x > BOUNDS.1 || self.y < BOUNDS.0 || self.y > BOUNDS.1
+    }
+}
+impl std::ops::Add<&Direction> for CoordinateSet {
+    type Output = CoordinateSet;
+
+    fn add(self, other: &Direction) -> CoordinateSet {
+        CoordinateSet {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+
+impl std::ops::Add<&Direction> for &CoordinateSet {
+    type Output = CoordinateSet;
+
+    fn add(self, other: &Direction) -> CoordinateSet {
+        CoordinateSet {
+            x: self.x + other.x,
+            y: self.y + other.y,
+        }
+    }
+}
+impl std::ops::Mul<i32> for Direction {
+    type Output = Direction;
+    fn mul(self, rhs: i32) -> Self::Output {
+        Direction {
+            x: self.x * rhs,
+            y: self.y * rhs,
+        }
+    }
+}
 
 use Color::*;
 use PieceType::*;
@@ -54,11 +101,11 @@ impl Piece {
             (_, Empty) => ' ',
         }
     }
-    fn forward(&self) -> i32 {
+    fn forward(&self) -> Direction {
         if self.color == BOTTOM_SIDE {
-            -1
+            Direction { x: 0, y: -1 }
         } else {
-            1
+            Direction { x: 0, y: 1 }
         }
     }
     fn point_value(&self) -> i32 {
@@ -70,13 +117,6 @@ impl Piece {
             Queen => 9,
             King { .. } => 10000,
             Empty => 0,
-        }
-    }
-
-    fn possible_moves(&self, x: usize, y: usize, mut position: &BoardPosition) {
-        match &self.piece_type {
-            if(y+self.forward() < 0)
-            Pawn => if (position.get_piece(x, y + self.forward()) == Empty) {},
         }
     }
 }
@@ -98,8 +138,92 @@ impl BoardPosition {
             children: Vec::new(),
         }
     }
-    fn get_piece(&self, x: usize, y: usize) -> &Piece {
-        &self.board[y][x]
+    fn get_piece(&self, square: &CoordinateSet) -> &Piece {
+        &self.board[square.y as usize][square.x as usize]
+    }
+    fn set_piece(&mut self, square: &CoordinateSet, piece: Piece) {
+        self.board[square.y as usize][square.x as usize] = piece;
+    }
+    fn clear_square(&mut self, square: &CoordinateSet) {
+        self.set_piece(square, Piece::new(White, Empty));
+    }
+    fn move_arbitrary(
+        &self,
+        start: &CoordinateSet,
+        end: &CoordinateSet,
+        cant_capture: bool,
+    ) -> Option<BoardPosition> {
+        let target = self.get_piece(end);
+        if target.piece_type != Empty {
+            let moving = self.get_piece(start);
+            if cant_capture || moving.color == target.color {
+                return None;
+            }
+        }
+
+        let mut new_board = self.clone();
+        new_board.set_piece(end, *self.get_piece(start));
+        new_board.clear_square(start);
+        Some(new_board)
+    }
+
+    fn move_direction(
+        &self,
+        start: &CoordinateSet,
+        direction: &Direction,
+        cant_capture: bool,
+    ) -> Option<BoardPosition> {
+        let target = start + direction;
+        if target.out_of_bounds() {
+            return None;
+        }
+        self.move_arbitrary(start, &target, cant_capture)
+    }
+    fn move_repeat(
+        &self,
+        start: CoordinateSet,
+        direction: Direction,
+        mut previous: Vec<BoardPosition>,
+        repeat: i32,
+    ) -> Vec<BoardPosition> {
+        let direction = direction * repeat;
+        if self.get_piece(&(&start + &direction)).piece_type != Empty {
+            return previous;
+        }
+        let new = self.move_direction(&start, &direction, false);
+        match new {
+            None => previous,
+            Some(to_add) => {
+                previous.push(to_add);
+                previous
+            }
+        }
+    }
+    fn possible_moves(
+        position: &[[Piece; 8]; 8],
+        start: CoordinateSet,
+        mut previous: Vec<BoardPosition>,
+    ) -> Vec<BoardPosition> {
+        let piece_to_move = position.get_piece(&start);
+
+        match piece_to_move.piece_type {
+            Rook { .. } => position.move_repeat(start, Direction::LEFT, previous, 1),
+            _ => Vec::new(),
+        }
+    }
+    fn eval_moves(&mut self) {
+        for i in 0..self.board.len() {
+            for j in 0..self.board[i].len() {
+                self.children = BoardPosition::possible_moves(
+                    self.board,
+                    CoordinateSet {
+                        x: j as i32,
+                        y: i as i32,
+                    },
+                    self.children,
+                );
+            }
+        }
     }
 }
 
