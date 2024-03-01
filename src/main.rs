@@ -1,4 +1,6 @@
 use std::{fmt, usize};
+use Color::*;
+use PieceType::*;
 
 #[allow(dead_code)]
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -28,7 +30,22 @@ struct Direction {
     y: i32,
 }
 impl Direction {
-    const LEFT: Direction = Direction { x: -1, y: 1 };
+    const LEFT: Direction = Direction { x: -1, y: 0 };
+    const RIGHT: Direction = Direction { x: 1, y: 0 };
+    const UP: Direction = Direction { x: 0, y: -1 };
+    const DOWN: Direction = Direction { x: 0, y: 1 };
+    const ORTHOGONAL_DIRECTIONS: [Direction; 4] = [
+        Direction::LEFT,
+        Direction::RIGHT,
+        Direction::UP,
+        Direction::DOWN,
+    ];
+    const DIAGONAL_DIRECTIONS: [Direction; 4] = [
+        Direction { x: -1, y: -1 }, // UP_LEFT
+        Direction { x: 1, y: -1 },  // UP_RIGHT
+        Direction { x: -1, y: 1 },  // DOWN_LEFT
+        Direction { x: 1, y: 1 },   // DOWN_RIGHT
+    ];
 }
 const BOUNDS: (i32, i32) = (0, 7);
 impl CoordinateSet {
@@ -57,7 +74,7 @@ impl std::ops::Add<&Direction> for &CoordinateSet {
         }
     }
 }
-impl std::ops::Mul<i32> for Direction {
+impl std::ops::Mul<i32> for &Direction {
     type Output = Direction;
     fn mul(self, rhs: i32) -> Self::Output {
         Direction {
@@ -218,20 +235,29 @@ impl BoardPosition {
         }
     }
     fn get_piece(&self, square: &CoordinateSet) -> &Piece {
+        debug_assert!(!square.out_of_bounds(), "get_piece out of bounds");
         &self.board[square.y as usize][square.x as usize]
     }
     fn set_piece(&mut self, square: &CoordinateSet, piece: Piece) {
+        debug_assert!(!square.out_of_bounds(), "set_piece out of bounds");
         self.board[square.y as usize][square.x as usize] = piece;
     }
     fn clear_square(&mut self, square: &CoordinateSet) {
+        debug_assert!(!square.out_of_bounds(), "clear_square out of bounds");
         self.set_piece(square, Piece::new(White, Empty));
     }
+
     fn move_arbitrary(
         &self,
         start: &CoordinateSet,
         end: &CoordinateSet,
         cant_capture: bool,
     ) -> Option<BoardPosition> {
+        debug_assert!(
+            !start.out_of_bounds(),
+            "start in move_arbitrary out of bounds"
+        );
+        debug_assert!(!end.out_of_bounds(), "end in move_arbitrary out of bounds");
         let target = self.get_piece(end);
         if target.piece_type != Empty {
             let moving = self.get_piece(start);
@@ -317,6 +343,7 @@ impl BoardPosition {
     //     }
     // }
     fn eval_moves(&mut self) {
+        let mut moves = Vec::new();
         for i in 0..self.board.len() {
             for j in 0..self.board[i].len() {
                 // self.eval_moves()
@@ -329,6 +356,7 @@ impl BoardPosition {
                 // );
             }
         }
+        self.children = moves;
     }
 }
 
@@ -384,7 +412,7 @@ const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
 ];
 fn main() {
     let piece = Piece::new(White, Pawn);
-    let init_position = match BOTTOM_SIDE {
+    let mut init_position = match BOTTOM_SIDE {
         White => BoardPosition::new(INITIAL_BOARD, None),
         Black => {
             let mut half_reverse = INITIAL_BOARD.map(|mut row| {
@@ -395,6 +423,8 @@ fn main() {
             BoardPosition::new(half_reverse, None)
         }
     };
-
-    println!("{}", init_position);
+    init_position.eval_moves();
+    for position in init_position.children {
+        println!("{}", position);
+    }
 }
