@@ -1,4 +1,6 @@
 use std::{fmt, usize};
+use Color::*;
+use PieceType::*;
 
 #[allow(dead_code)]
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -27,7 +29,22 @@ struct Direction {
     y: i32,
 }
 impl Direction {
-    const LEFT: Direction = Direction { x: -1, y: 1 };
+    const LEFT: Direction = Direction { x: -1, y: 0 };
+    const RIGHT: Direction = Direction { x: 1, y: 0 };
+    const UP: Direction = Direction { x: 0, y: -1 };
+    const DOWN: Direction = Direction { x: 0, y: 1 };
+    const ORTHOGONAL_DIRECTIONS: [Direction; 4] = [
+        Direction::LEFT,
+        Direction::RIGHT,
+        Direction::UP,
+        Direction::DOWN,
+    ];
+    const DIAGONAL_DIRECTIONS: [Direction; 4] = [
+        Direction { x: -1, y: -1 }, // UP_LEFT
+        Direction { x: 1, y: -1 },  // UP_RIGHT
+        Direction { x: -1, y: 1 },  // DOWN_LEFT
+        Direction { x: 1, y: 1 },   // DOWN_RIGHT
+    ];
 }
 const BOUNDS: (i32, i32) = (0, 7);
 impl CoordinateSet {
@@ -56,7 +73,7 @@ impl std::ops::Add<&Direction> for &CoordinateSet {
         }
     }
 }
-impl std::ops::Mul<i32> for Direction {
+impl std::ops::Mul<i32> for &Direction {
     type Output = Direction;
     fn mul(self, rhs: i32) -> Self::Output {
         Direction {
@@ -66,8 +83,6 @@ impl std::ops::Mul<i32> for Direction {
     }
 }
 
-use Color::*;
-use PieceType::*;
 #[derive(Clone, Copy)]
 struct Piece {
     color: Color,
@@ -139,20 +154,29 @@ impl BoardPosition {
         }
     }
     fn get_piece(&self, square: &CoordinateSet) -> &Piece {
+        debug_assert!(!square.out_of_bounds(), "get_piece out of bounds");
         &self.board[square.y as usize][square.x as usize]
     }
     fn set_piece(&mut self, square: &CoordinateSet, piece: Piece) {
+        debug_assert!(!square.out_of_bounds(), "set_piece out of bounds");
         self.board[square.y as usize][square.x as usize] = piece;
     }
     fn clear_square(&mut self, square: &CoordinateSet) {
+        debug_assert!(!square.out_of_bounds(), "clear_square out of bounds");
         self.set_piece(square, Piece::new(White, Empty));
     }
+
     fn move_arbitrary(
         &self,
         start: &CoordinateSet,
         end: &CoordinateSet,
         cant_capture: bool,
     ) -> Option<BoardPosition> {
+        debug_assert!(
+            !start.out_of_bounds(),
+            "start in move_arbitrary out of bounds"
+        );
+        debug_assert!(!end.out_of_bounds(), "end in move_arbitrary out of bounds");
         let target = self.get_piece(end);
         if target.piece_type != Empty {
             let moving = self.get_piece(start);
@@ -173,6 +197,10 @@ impl BoardPosition {
         direction: &Direction,
         cant_capture: bool,
     ) -> Option<BoardPosition> {
+        debug_assert!(
+            !start.out_of_bounds(),
+            "start in move_direction out of bounds"
+        );
         let target = start + direction;
         if target.out_of_bounds() {
             return None;
@@ -181,49 +209,88 @@ impl BoardPosition {
     }
     fn move_repeat(
         &self,
-        start: CoordinateSet,
-        direction: Direction,
+        start: &CoordinateSet,
+        direction: &Direction,
         mut previous: Vec<BoardPosition>,
         repeat: i32,
     ) -> Vec<BoardPosition> {
-        let direction = direction * repeat;
-        if self.get_piece(&(&start + &direction)).piece_type != Empty {
-            return previous;
-        }
-        let new = self.move_direction(&start, &direction, false);
+        debug_assert!(!start.out_of_bounds(), "start in move_repeat out of bounds");
+
+        let direction = &(direction * repeat);
+
+        let new = self.move_direction(start, direction, false);
+
         match new {
             None => previous,
             Some(to_add) => {
                 previous.push(to_add);
-                previous
+                if self.get_piece(&(start + direction)).piece_type == Empty {
+                    previous
+                } else {
+                    self.move_repeat(start, direction, previous, repeat + 1)
+                }
             }
         }
     }
     fn possible_moves(
-        position: &[[Piece; 8]; 8],
+        position: &BoardPosition,
         start: CoordinateSet,
         mut previous: Vec<BoardPosition>,
     ) -> Vec<BoardPosition> {
+        debug_assert!(
+            !start.out_of_bounds(),
+            "start in possible_moves out of bounds"
+        );
         let piece_to_move = position.get_piece(&start);
 
-        match piece_to_move.piece_type {
-            Rook { .. } => position.move_repeat(start, Direction::LEFT, previous, 1),
+        let previous = match piece_to_move.piece_type {
+            Rook { .. } => Direction::ORTHOGONAL_DIRECTIONS
+                .into_iter()
+                .fold(previous, |curr, direction| {
+                    position.move_repeat(&start, &direction, curr, 1)
+                }),
+            Bishop => Direction::DIAGONAL_DIRECTIONS
+                .into_iter()
+                .fold(previous, |curr, direction| {
+                    position.move_repeat(&start, &direction, curr, 1)
+                }),
+            Queen => {
+                let partial = Direction::DIAGONAL_DIRECTIONS
+                    .into_iter()
+                    .fold(previous, |curr, direction| {
+                        position.move_repeat(&start, &direction, curr, 1)
+                    });
+                Direction::ORTHOGONAL_DIRECTIONS
+                    .into_iter()
+                    .fold(partial, |curr, direction| {
+                        position.move_repeat(&start, &direction, curr, 1)
+                    })
+            }
+            King { has_moved } => {
+                let partial = Direction::DIAGONAL_DIRECTIONS
+                    .into_iter()
+                    .fold(previous, |curr, direction| previous);
+                partial
+            }
             _ => Vec::new(),
-        }
+        };
+        previous
     }
     fn eval_moves(&mut self) {
+        let mut moves = Vec::new();
         for i in 0..self.board.len() {
             for j in 0..self.board[i].len() {
-                self.children = BoardPosition::possible_moves(
-                    self.board,
+                moves = BoardPosition::possible_moves(
+                    self,
                     CoordinateSet {
                         x: j as i32,
                         y: i as i32,
                     },
-                    self.children,
+                    moves,
                 );
             }
         }
+        self.children = moves;
     }
 }
 
@@ -279,7 +346,7 @@ const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
 ];
 fn main() {
     let piece = Piece::new(White, Pawn);
-    let init_position = match BOTTOM_SIDE {
+    let mut init_position = match BOTTOM_SIDE {
         White => BoardPosition::new(INITIAL_BOARD, None),
         Black => {
             let mut half_reverse = INITIAL_BOARD.map(|mut row| {
@@ -290,6 +357,8 @@ fn main() {
             BoardPosition::new(half_reverse, None)
         }
     };
-
-    println!("{}", init_position);
+    init_position.eval_moves();
+    for position in init_position.children {
+        println!("{}", position);
+    }
 }
