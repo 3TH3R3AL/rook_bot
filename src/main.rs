@@ -18,6 +18,7 @@ enum PieceType {
     Queen,
     Empty,
 }
+#[derive(Clone, PartialEq, Eq)]
 struct CoordinateSet {
     x: i32,
     y: i32,
@@ -67,6 +68,7 @@ impl std::ops::Mul<i32> for Direction {
 }
 
 use Color::*;
+use MoveType::*;
 use PieceType::*;
 #[derive(Clone, Copy)]
 struct Piece {
@@ -76,10 +78,21 @@ struct Piece {
 #[derive(Clone)]
 struct BoardPosition {
     board: [[Piece; 8]; 8],
-    en_passante: Option<(i32, i32)>,
+    en_passante: Option<CoordinateSet>,
     children: Vec<BoardPosition>,
 }
-
+#[derive(PartialEq, Eq)]
+enum MoveType {
+    Standard,
+    CaptureOnly,
+    NoCapture,
+    PawnFirst,
+    Promotion,
+    Repeat,
+    EnPassante,
+    Castle,
+}
+struct ChessMove(MoveType, Direction);
 impl Piece {
     fn new(color: Color, piece_type: PieceType) -> Piece {
         Piece { color, piece_type }
@@ -101,6 +114,9 @@ impl Piece {
             (_, Empty) => ' ',
         }
     }
+    fn is_empty(&self) -> bool {
+        self.piece_type == Empty
+    }
     fn forward(&self) -> Direction {
         if self.color == BOTTOM_SIDE {
             Direction { x: 0, y: -1 }
@@ -108,6 +124,69 @@ impl Piece {
             Direction { x: 0, y: 1 }
         }
     }
+    fn get_moves(&self) -> Vec<ChessMove> {
+        // This is written with the assumption that +y = forward and -y = backward, -x is queen
+        // side, +x is king side
+        match &self.piece_type {
+            Pawn => vec![
+                ChessMove(NoCapture, Direction { x: 0, y: 1 }),
+                ChessMove(PawnFirst, Direction { x: 0, y: 2 }),
+                ChessMove(CaptureOnly, Direction { x: 1, y: 1 }),
+                ChessMove(CaptureOnly, Direction { x: -1, y: 1 }),
+                ChessMove(EnPassante, Direction { x: 1, y: 1 }),
+                ChessMove(EnPassante, Direction { x: -1, y: 1 }),
+                ChessMove(Promotion, Direction { x: 0, y: 1 }),
+                ChessMove(Promotion, Direction { x: 1, y: 1 }),
+                ChessMove(Promotion, Direction { x: -1, y: 1 }),
+            ],
+            Knight => vec![
+                ChessMove(Standard, Direction { x: -1, y: 2 }),
+                ChessMove(Standard, Direction { x: 1, y: 2 }),
+                ChessMove(Standard, Direction { x: -1, y: -2 }),
+                ChessMove(Standard, Direction { x: 1, y: -2 }),
+                ChessMove(Standard, Direction { y: -1, x: 2 }),
+                ChessMove(Standard, Direction { y: 1, x: 2 }),
+                ChessMove(Standard, Direction { y: -1, x: -2 }),
+                ChessMove(Standard, Direction { y: 1, x: -2 }),
+            ],
+            Bishop => vec![
+                ChessMove(Repeat, Direction { x: 1, y: 1 }),
+                ChessMove(Repeat, Direction { x: -1, y: 1 }),
+                ChessMove(Repeat, Direction { x: 1, y: -1 }),
+                ChessMove(Repeat, Direction { x: -1, y: -1 }),
+            ],
+            Rook { .. } => vec![
+                ChessMove(Repeat, Direction { x: 1, y: 0 }),
+                ChessMove(Repeat, Direction { x: -1, y: 0 }),
+                ChessMove(Repeat, Direction { x: 0, y: 1 }),
+                ChessMove(Repeat, Direction { x: 0, y: -1 }),
+            ],
+            Queen => vec![
+                ChessMove(Repeat, Direction { x: 1, y: 0 }),
+                ChessMove(Repeat, Direction { x: -1, y: 0 }),
+                ChessMove(Repeat, Direction { x: 0, y: 1 }),
+                ChessMove(Repeat, Direction { x: 0, y: -1 }),
+                ChessMove(Repeat, Direction { x: 1, y: 1 }),
+                ChessMove(Repeat, Direction { x: -1, y: 1 }),
+                ChessMove(Repeat, Direction { x: 1, y: -1 }),
+                ChessMove(Repeat, Direction { x: -1, y: -1 }),
+            ],
+            King { .. } => vec![
+                ChessMove(Standard, Direction { x: 1, y: 0 }),
+                ChessMove(Standard, Direction { x: -1, y: 0 }),
+                ChessMove(Standard, Direction { x: 0, y: 1 }),
+                ChessMove(Standard, Direction { x: 0, y: -1 }),
+                ChessMove(Standard, Direction { x: 1, y: 1 }),
+                ChessMove(Standard, Direction { x: -1, y: 1 }),
+                ChessMove(Standard, Direction { x: 1, y: -1 }),
+                ChessMove(Standard, Direction { x: -1, y: -1 }),
+                ChessMove(Castle, Direction { x: -3, y: 0 }),
+                ChessMove(Castle, Direction { x: -2, y: 0 }),
+            ],
+            Empty => vec![],
+        }
+    }
+
     fn point_value(&self) -> i32 {
         match &self.piece_type {
             Pawn => 1,
@@ -130,7 +209,7 @@ impl fmt::Display for Piece {
 impl BoardPosition {
     fn new(
         init_arr: [[(Color, PieceType); 8]; 8],
-        en_passante: Option<(i32, i32)>,
+        en_passante: Option<CoordinateSet>,
     ) -> BoardPosition {
         BoardPosition {
             board: init_arr.map(|row| row.map(|cell| Piece::new(cell.0, cell.1))),
@@ -167,61 +246,87 @@ impl BoardPosition {
         Some(new_board)
     }
 
-    fn move_direction(
-        &self,
-        start: &CoordinateSet,
-        direction: &Direction,
-        cant_capture: bool,
-    ) -> Option<BoardPosition> {
-        let target = start + direction;
-        if target.out_of_bounds() {
-            return None;
-        }
-        self.move_arbitrary(start, &target, cant_capture)
-    }
-    fn move_repeat(
-        &self,
-        start: CoordinateSet,
-        direction: Direction,
-        mut previous: Vec<BoardPosition>,
-        repeat: i32,
-    ) -> Vec<BoardPosition> {
+    fn move_repeat(&mut self, start: CoordinateSet, direction: Direction, repeat: i32) {
         let direction = direction * repeat;
-        if self.get_piece(&(&start + &direction)).piece_type != Empty {
-            return previous;
+        let target = &start + &direction;
+        if self.get_piece(&target).piece_type != Empty || target.out_of_bounds() {
+            return;
         }
-        let new = self.move_direction(&start, &direction, false);
+        let new = self.move_arbitrary(&start, &target, false);
         match new {
-            None => previous,
+            None => (),
             Some(to_add) => {
-                previous.push(to_add);
-                previous
+                self.children.push(to_add);
+                self.move_repeat(start, direction, repeat + 1)
             }
         }
     }
-    fn possible_moves(
-        position: &[[Piece; 8]; 8],
-        start: CoordinateSet,
-        mut previous: Vec<BoardPosition>,
-    ) -> Vec<BoardPosition> {
-        let piece_to_move = position.get_piece(&start);
 
-        match piece_to_move.piece_type {
-            Rook { .. } => position.move_repeat(start, Direction::LEFT, previous, 1),
-            _ => Vec::new(),
+    fn push_if_exists(&mut self, to_add: Option<BoardPosition>) {
+        match to_add {
+            None => (),
+            Some(position) => {
+                self.children.push(position);
+            }
         }
     }
+    fn eval_move(&mut self, piece: Piece, coords: &CoordinateSet, move_to_eval: ChessMove) {
+        let destination = coords + &move_to_eval.1;
+        if destination.out_of_bounds() {
+            return;
+        }
+        let target = self.get_piece(&destination);
+        if target.is_empty() {
+            if move_to_eval.0 == CaptureOnly {
+                return;
+            }
+        } else {
+            if move_to_eval.0 == NoCapture {
+                return;
+            }
+            if move_to_eval.0 == Standard
+                || move_to_eval.0 == CaptureOnly && target.color == piece.color
+            {
+                return;
+            }
+        }
+        match move_to_eval.0 {
+            EnPassante => match &self.en_passante {
+                None => return,
+                Some(enp_coords) => {
+                    if enp_coords != coords {
+                        return;
+                    }
+                }
+            },
+            PawnFirst => {}
+            Standard => self.push_if_exists(self.move_arbitrary(coords, &destination, false)),
+            _ => {}
+        };
+    }
+    // fn possible_moves(
+    //     position: &[[Piece; 8]; 8],
+    //     start: CoordinateSet,
+    //     mut previous: Vec<BoardPosition>,
+    // ) -> Vec<BoardPosition> {
+    //     let piece_to_move = position.get_piece(&start);
+    //
+    //     match piece_to_move.piece_type {
+    //         Rook { .. } => position.move_repeat(start, Direction::LEFT, previous, 1),
+    //         _ => Vec::new(),
+    //     }
+    // }
     fn eval_moves(&mut self) {
         for i in 0..self.board.len() {
             for j in 0..self.board[i].len() {
-                self.children = BoardPosition::possible_moves(
-                    self.board,
-                    CoordinateSet {
-                        x: j as i32,
-                        y: i as i32,
-                    },
-                    self.children,
-                );
+                // self.eval_moves()
+                //     self.board,
+                //     CoordinateSet {
+                //         x: j as i32,
+                //         y: i as i32,
+                //     },
+                //     self.children,
+                // );
             }
         }
     }
