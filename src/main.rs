@@ -29,24 +29,6 @@ struct Direction {
     x: i32,
     y: i32,
 }
-impl Direction {
-    const LEFT: Direction = Direction { x: -1, y: 0 };
-    const RIGHT: Direction = Direction { x: 1, y: 0 };
-    const UP: Direction = Direction { x: 0, y: -1 };
-    const DOWN: Direction = Direction { x: 0, y: 1 };
-    const ORTHOGONAL_DIRECTIONS: [Direction; 4] = [
-        Direction::LEFT,
-        Direction::RIGHT,
-        Direction::UP,
-        Direction::DOWN,
-    ];
-    const DIAGONAL_DIRECTIONS: [Direction; 4] = [
-        Direction { x: -1, y: -1 }, // UP_LEFT
-        Direction { x: 1, y: -1 },  // UP_RIGHT
-        Direction { x: -1, y: 1 },  // DOWN_LEFT
-        Direction { x: 1, y: 1 },   // DOWN_RIGHT
-    ];
-}
 const BOUNDS: (i32, i32) = (0, 7);
 impl CoordinateSet {
     fn out_of_bounds(&self) -> bool {
@@ -266,14 +248,14 @@ impl BoardPosition {
             }
         }
 
-        let mut new_board = self.clone();
+        let mut new_board = BoardPosition::new(self.board.clone(), false);
         new_board.set_piece(end, *self.get_piece(start));
         new_board.clear_square(start);
         Some(new_board)
     }
 
     fn move_repeat(&mut self, start: CoordinateSet, direction: Direction, repeat: i32) {
-        let direction = direction * repeat;
+        let direction = &direction * repeat;
         let target = &start + &direction;
         if self.get_piece(&target).piece_type != Empty || target.out_of_bounds() {
             return;
@@ -289,6 +271,7 @@ impl BoardPosition {
     }
 
     fn push_if_exists(&mut self, to_add: Option<BoardPosition>) {
+
         match to_add {
             None => (),
             Some(position) => {
@@ -320,12 +303,14 @@ impl BoardPosition {
             EnPassante => match &self.en_passante {
                 None => return,
                 Some(enp_coords) => {
-                    if enp_coords != coords {
+                    if *enp_coords != destination {
                         return;
                     }
                 }
             },
-            PawnFirst => {}
+            PawnFirst => {
+                if
+            }
             Standard => self.push_if_exists(self.move_arbitrary(coords, &destination, false)),
             _ => {}
         };
