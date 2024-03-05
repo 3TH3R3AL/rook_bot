@@ -1,3 +1,4 @@
+use core::panic;
 use std::convert::From;
 use std::{fmt, usize};
 use Color::*;
@@ -99,6 +100,8 @@ struct Piece {
 struct BoardPosition {
     board: [[Piece; 8]; 8],
     en_passante: Option<CoordinateSet>,
+    black_castle: (bool, bool),
+    white_castle: (bool, bool),
     children: Vec<BoardPosition>,
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -143,6 +146,13 @@ impl Piece {
             -1
         } else {
             1
+        }
+    }
+    fn set_moved(&mut self) {
+        self.piece_type = match self.piece_type {
+            King { has_moved: false } => Rook { has_moved: true },
+            Rook { has_moved: false } => Rook { has_moved: true },
+            _ => self.piece_type,
         }
     }
     fn get_moves(&self) -> Vec<ChessMove> {
@@ -255,7 +265,7 @@ impl Piece {
                 ChessMove(Standard, Direction { x: 1, y: -1 }),
                 ChessMove(Standard, Direction { x: -1, y: -1 }),
                 ChessMove(Castle, Direction { x: -3, y: 0 }),
-                ChessMove(Castle, Direction { x: -2, y: 0 }),
+                ChessMove(Castle, Direction { x: 2, y: 0 }),
             ],
             Empty => vec![],
         }
@@ -317,7 +327,9 @@ impl BoardPosition {
         );
         debug_assert!(!end.out_of_bounds(), "end in move_arbitrary out of bounds");
         let mut new_board = BoardPosition::new(self.board.clone());
-        new_board.set_piece(end, *self.get_piece(start));
+        let mut new_piece = *self.get_piece(start);
+        new_piece.set_moved();
+        new_board.set_piece(end, new_piece);
         new_board.clear_square(start);
         new_board
     }
@@ -420,7 +432,30 @@ impl BoardPosition {
                 .children
                 .push(self.move_arbitrary(coords, &destination)),
             Repeat => self.move_repeat(coords, &move_to_eval.1, 1),
-            Castle => {}
+            Castle => {
+                match piece.piece_type {
+                    King { has_moved } => {
+                        if has_moved {
+                            return;
+                        }
+                    }
+                    _ => {
+                        panic!("Non King Castling Attempted");
+                    }
+                };
+                match move_to_eval.1.x {
+                    -2 => {
+                        let right = self.get_piece(&(coords + Direction { x: 1, y: 0 }));
+                        if !right.is_empty() {
+                            return;
+                        }
+                    }
+                    3 => {}
+                    _ => {
+                        panic!("Bad Castling Direction ");
+                    }
+                }
+            }
         }
     }
     // fn possible_moves(
