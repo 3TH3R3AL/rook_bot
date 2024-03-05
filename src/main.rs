@@ -100,8 +100,6 @@ struct Piece {
 struct BoardPosition {
     board: [[Piece; 8]; 8],
     en_passante: Option<CoordinateSet>,
-    black_castle: (bool, bool),
-    white_castle: (bool, bool),
     children: Vec<BoardPosition>,
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -444,13 +442,21 @@ impl BoardPosition {
                     }
                 };
                 match move_to_eval.1.x {
-                    -2 => {
-                        let right = self.get_piece(&(coords + Direction { x: 1, y: 0 }));
-                        if !right.is_empty() {
+                    // Remember king is at position x=4
+                    2 => {
+                        let right_rook = self.get_piece(&(coords + Direction { x: 3, y: 0 }));
+                        if right_rook.piece_type != Rook { has_moved: false } {
+                            return;
+                        }
+                        ()
+
+                    }
+                    -3 => {
+
+                        if right.piece_type != Rook { has_moved: false } {
                             return;
                         }
                     }
-                    3 => {}
                     _ => {
                         panic!("Bad Castling Direction ");
                     }
