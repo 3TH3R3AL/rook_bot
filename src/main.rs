@@ -1,5 +1,6 @@
 use core::panic;
 use std::convert::From;
+use std::ops::Not;
 use std::{fmt, usize};
 use Color::*;
 use PieceType::*;
@@ -10,6 +11,17 @@ enum Color {
     White,
     Black,
 }
+
+impl Not for Color {
+    type Output = Color;
+    fn not(self) -> Self::Output {
+        match self {
+            White => Black,
+            Black => White,
+        }
+    }
+}
+
 const BOTTOM_SIDE: Color = White;
 #[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -21,6 +33,11 @@ enum PieceType {
     King { has_moved: bool },
     Queen,
     Empty,
+}
+impl PieceType {
+    fn to_promote() -> [PieceType; 4] {
+        [Knight, Bishop, Rook { has_moved: true }, Queen]
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CoordinateSet {
@@ -109,6 +126,7 @@ enum MoveType {
     NoCapture,
     PawnFirst,
     Promotion,
+    PromotionCapture,
     Repeat,
     EnPassante,
     Castle,
@@ -148,7 +166,7 @@ impl Piece {
     }
     fn set_moved(&mut self) {
         self.piece_type = match self.piece_type {
-            King { has_moved: false } => Rook { has_moved: true },
+            King { has_moved: false } => King { has_moved: true },
             Rook { has_moved: false } => Rook { has_moved: true },
             _ => self.piece_type,
         }
@@ -207,14 +225,14 @@ impl Piece {
                     },
                 ),
                 ChessMove(
-                    Promotion,
+                    PromotionCapture,
                     Direction {
                         x: 1,
                         y: 1 * self.forward(),
                     },
                 ),
                 ChessMove(
-                    Promotion,
+                    PromotionCapture,
                     Direction {
                         x: -1,
                         y: 1 * self.forward(),
@@ -262,7 +280,7 @@ impl Piece {
                 ChessMove(Standard, Direction { x: -1, y: 1 }),
                 ChessMove(Standard, Direction { x: 1, y: -1 }),
                 ChessMove(Standard, Direction { x: -1, y: -1 }),
-                ChessMove(Castle, Direction { x: -3, y: 0 }),
+                ChessMove(Castle, Direction { x: -2, y: 0 }),
                 ChessMove(Castle, Direction { x: 2, y: 0 }),
             ],
             Empty => vec![],
@@ -306,24 +324,41 @@ impl BoardPosition {
         }
     }
     fn get_piece(&self, square: &CoordinateSet) -> &Piece {
-        debug_assert!(!square.out_of_bounds(), "get_piece out of bounds");
+        debug_assert!(
+            !square.out_of_bounds(),
+            "get_piece out of bounds: {:?}",
+            square
+        );
         &self.board[square.y as usize][square.x as usize]
     }
     fn set_piece(&mut self, square: &CoordinateSet, piece: Piece) {
-        debug_assert!(!square.out_of_bounds(), "set_piece out of bounds");
+        debug_assert!(
+            !square.out_of_bounds(),
+            "set_piece out of bounds: {:?}",
+            square
+        );
         self.board[square.y as usize][square.x as usize] = piece;
     }
     fn clear_square(&mut self, square: &CoordinateSet) {
-        debug_assert!(!square.out_of_bounds(), "clear_square out of bounds");
+        debug_assert!(
+            !square.out_of_bounds(),
+            "clear_square out of bounds: {:?}",
+            square
+        );
         self.set_piece(square, Piece::new(White, Empty));
     }
 
     fn move_arbitrary(&self, start: &CoordinateSet, end: &CoordinateSet) -> BoardPosition {
         debug_assert!(
             !start.out_of_bounds(),
-            "start in move_arbitrary out of bounds"
+            "start in move_arbitrary out of bounds: {:?}",
+            start
         );
-        debug_assert!(!end.out_of_bounds(), "end in move_arbitrary out of bounds");
+        debug_assert!(
+            !end.out_of_bounds(),
+            "end in move_arbitrary out of bounds: {:?}",
+            end
+        );
         let mut new_board = BoardPosition::new(self.board.clone());
         let mut new_piece = *self.get_piece(start);
         new_piece.set_moved();
@@ -364,11 +399,11 @@ impl BoardPosition {
         }
         let target = self.get_piece(&destination);
         if target.is_empty() {
-            if move_to_eval.0 == CaptureOnly {
+            if let CaptureOnly | PromotionCapture = move_to_eval.0 {
                 return;
             }
         } else {
-            if let NoCapture | PawnFirst = move_to_eval.0 {
+            if let NoCapture | PawnFirst | Promotion = move_to_eval.0 {
                 return;
             }
             if target.color == piece.color {
@@ -430,6 +465,7 @@ impl BoardPosition {
                 .children
                 .push(self.move_arbitrary(coords, &destination)),
             Repeat => self.move_repeat(coords, &move_to_eval.1, 1),
+            // May want to consider pulling some of this into another function
             Castle => {
                 match piece.piece_type {
                     King { has_moved } => {
@@ -441,41 +477,69 @@ impl BoardPosition {
                         panic!("Non King Castling Attempted");
                     }
                 };
-                match move_to_eval.1.x {
+                let (rook_pos, mid_point) = match move_to_eval.1.x {
                     // Remember king is at position x=4
-                    2 => {
-                        let right_rook = self.get_piece(&(coords + Direction { x: 3, y: 0 }));
-                        if right_rook.piece_type != Rook { has_moved: false } {
-                            return;
-                        }
-                        ()
-
-                    }
-                    -3 => {
-
-                        if right.piece_type != Rook { has_moved: false } {
-                            return;
-                        }
-                    }
+                    2 => (
+                        coords + Direction { x: 3, y: 0 },
+                        coords + Direction { x: 1, y: 0 },
+                    ),
+                    -2 => (
+                        coords + Direction { x: -4, y: 0 },
+                        coords + Direction { x: -1, y: 0 },
+                    ),
                     _ => {
                         panic!("Bad Castling Direction ");
                     }
+                };
+
+                debug_assert!(
+                    !rook_pos.out_of_bounds(),
+                    "rook_pos out of bounds: {:?}, king_pos: {:?}",
+                    rook_pos,
+                    coords
+                );
+
+                let rook = self.get_piece(&rook_pos);
+                if rook.piece_type != (Rook { has_moved: false }) {
+                    // Don't need to check color because of has_moved
+                    return;
+                }
+                if !self.get_piece(&mid_point).is_empty() {
+                    return;
+                }
+                //Don't need to check second space because it is destination
+                let mut test_board = self.move_arbitrary(coords, &mid_point);
+                // This method is a little iffy, because it will evaluate moves on the
+                // other side, including castling, which could then evaluate white moves,
+                // but that should stop after 2 because of has_moved, so it should be fine.
+                test_board.eval_moves(!piece.color);
+                for board in test_board.children {
+                    if *board.get_piece(&mid_point)
+                        != (Piece {
+                            piece_type: King { has_moved: true },
+                            color: piece.color,
+                        })
+                    {
+                        return;
+                    }
+                }
+                let mut final_board = self.move_arbitrary(coords, &destination);
+                final_board.set_piece(&mid_point, *rook);
+                final_board.clear_square(&rook_pos);
+                self.children.push(final_board);
+            }
+
+            Promotion | PromotionCapture => {
+                let color = piece.color;
+                for piece_type in PieceType::to_promote() {
+                    let mut new_board = BoardPosition::new(self.board.clone());
+                    new_board.clear_square(coords);
+                    new_board.set_piece(&destination, Piece { piece_type, color });
+                    self.children.push(new_board);
                 }
             }
         }
     }
-    // fn possible_moves(
-    //     position: &[[Piece; 8]; 8],
-    //     start: CoordinateSet,
-    //     mut previous: Vec<BoardPosition>,
-    // ) -> Vec<BoardPosition> {
-    //     let piece_to_move = position.get_piece(&start);
-    //
-    //     match piece_to_move.piece_type {
-    //         Rook { .. } => position.move_repeat(start, Direction::LEFT, previous, 1),
-    //         _ => Vec::new(),
-    //     }
-    // }
     fn eval_moves(&mut self, player_color: Color) {
         for i in 0..self.board.len() {
             for j in 0..self.board[i].len() {
@@ -493,6 +557,32 @@ impl BoardPosition {
                     .for_each(|move_to_eval| self.eval_move(&target, &move_to_eval));
             }
         }
+    }
+
+    fn get_legal_moves(&mut self, player_color: Color) -> Vec<ChessMove> {
+        let mut moves: Vec<ChessMove> = Vec::new();
+        for i in 0..self.board.len() {
+            for j in 0..self.board[i].len() {
+                let target = CoordinateSet {
+                    x: j as i32,
+                    y: i as i32,
+                };
+                let piece = self.get_piece(&target);
+                if piece.color != player_color || piece.piece_type == Empty {
+                    continue;
+                }
+
+                let potential_moves = self.board[i][j].get_moves();
+                for potential_move in potential_moves {
+                    let current_length = self.children.len();
+                    self.eval_move(&target, &potential_move);
+                    if self.children.len() > current_length {
+                        moves.push(potential_move);
+                    }
+                }
+            }
+        }
+        moves
     }
 }
 
@@ -536,15 +626,25 @@ impl fmt::Display for BoardPosition {
 }
 
 #[rustfmt::skip]
+// const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
+//     [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
+//     [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
+//     [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
+// ];
 const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
-    [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
-    [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
+    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,King { has_moved: false}),(Black,Empty),(Black,Empty),(Black,Empty)],
+    [(White,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
-    [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
+    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    [(White,Rook { has_moved: false }),(Black,Empty),(Black,Empty),(White,Empty),(White,King { has_moved: false }),(White,Empty),(White,Empty),(White,Rook { has_moved: false })],
 ];
 fn main() {
     let mut init_position = match BOTTOM_SIDE {
