@@ -1,6 +1,8 @@
-use core::panic;
+use core::{panic, time};
 use std::convert::From;
 use std::ops::Not;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::{self, sleep};
 use std::{fmt, usize};
 use Color::*;
 use PieceType::*;
@@ -115,7 +117,7 @@ struct Piece {
 }
 #[derive(Clone)]
 struct BoardPosition {
-    board: [[Piece; 8]; 8],
+    board: Board,
     en_passante: Option<CoordinateSet>,
     children: Vec<BoardPosition>,
 }
@@ -314,9 +316,9 @@ impl From<[[(Color, PieceType); 8]; 8]> for BoardPosition {
         }
     }
 }
-
+type Board = [[Piece; 8]; 8];
 impl BoardPosition {
-    fn new(board: [[Piece; 8]; 8]) -> BoardPosition {
+    fn new(board: Board) -> BoardPosition {
         BoardPosition {
             board,
             en_passante: None,
@@ -404,6 +406,7 @@ impl BoardPosition {
             }
         } else {
             if let NoCapture | PawnFirst | Promotion = move_to_eval.0 {
+                println!("test");
                 return;
             }
             if target.color == piece.color {
@@ -445,7 +448,7 @@ impl BoardPosition {
                     true => 6,
                     false => 1,
                 };
-                if destination.y != row {
+                if coords.y != row {
                     return;
                 } // In correct row
                 if !self
@@ -530,6 +533,13 @@ impl BoardPosition {
             }
 
             Promotion | PromotionCapture => {
+                let row = match piece.color == BOTTOM_SIDE {
+                    true => 1,
+                    false => 6,
+                };
+                if coords.y != row {
+                    return;
+                }
                 let color = piece.color;
                 for piece_type in PieceType::to_promote() {
                     let mut new_board = BoardPosition::new(self.board.clone());
@@ -624,28 +634,103 @@ impl fmt::Display for BoardPosition {
         )
     }
 }
+#[derive(Clone, Copy)]
+enum BotMessage {
+    Stop,
+    Move(Board),
+}
+
+fn expand_tree(
+    root: &mut BoardPosition,
+    progress: &mut Vec<usize>,
+    min_depth: usize,
+    max_depth: usize,
+    initial_turn: Color,
+) {
+    let depth = progress.len();
+    if depth > max_depth {
+        sleep(time::Duration::from_millis(100));
+        return;
+    }
+    let mut current: &mut BoardPosition = root;
+    for i in 0..progress.len() - 1 {
+        let p = progress[i];
+        debug_assert!(current.children.len() <= p);
+        if current.children.len() == p {
+            println!("adding");
+            if i == min_depth {
+                for j in i..progress.len() {
+                    progress[j] = 0 as usize;
+                }
+                progress.push(0);
+                return expand_tree(root, progress, min_depth, max_depth, initial_turn);
+            }
+            progress[p] = 0;
+            progress[p - 1] += 1;
+            return expand_tree(root, progress, min_depth, max_depth, initial_turn);
+        }
+
+        current = &mut current.children[p];
+    }
+    current.eval_moves(if depth % 2 == 1 {
+        initial_turn
+    } else {
+        !initial_turn
+    });
+    progress[depth - 1] += 1;
+}
+
+fn run_bot(
+    bot_out: Sender<Board>,
+    bot_in: Receiver<BotMessage>,
+    initial_position: Board,
+    bot_color: Color,
+    initial_turn: Color,
+) {
+    let mut position = BoardPosition::new(initial_position);
+    let min_depth = 0;
+    let max_depth = 4;
+    let mut depth = vec![0];
+    loop {
+        match bot_in.try_recv() {
+            Ok(message) => match message {
+                BotMessage::Move(board) => {}
+                BotMessage::Stop => {
+                    break;
+                }
+            },
+            Err(e) => match e {
+                mpsc::TryRecvError::Empty => {}
+                mpsc::TryRecvError::Disconnected => {
+                    break;
+                }
+            },
+        }
+    }
+}
 
 #[rustfmt::skip]
-// const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
-//     [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
-//     [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
-//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-//     [(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
-//     [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
-// ];
 const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
-    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,King { has_moved: false}),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(White,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
+    [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
+    [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(White,Rook { has_moved: false }),(Black,Empty),(Black,Empty),(White,Empty),(White,King { has_moved: false }),(White,Empty),(White,Empty),(White,Rook { has_moved: false })],
+    [(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
+    [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
 ];
+// const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,King { has_moved: false}),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(White,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+//     [(White,Rook { has_moved: false }),(Black,Empty),(Black,Empty),(White,Empty),(White,King { has_moved: false }),(White,Empty),(White,Empty),(White,Rook { has_moved: false })],
+// ];
+
 fn main() {
     let mut init_position = match BOTTOM_SIDE {
         White => BoardPosition::from(INITIAL_BOARD),
@@ -658,7 +743,25 @@ fn main() {
             BoardPosition::from(half_reverse)
         }
     };
-    init_position.eval_moves(White);
+
+    // let (main_out, bot_in) = mpsc::channel();
+    // let (bot_out, main_in) = mpsc::channel();
+    //
+    // let bot =
+    //     thread::spawn(move || run_bot(bot_out, bot_in, init_position.board.clone(), White, White));
+
+    let max_depth = 4;
+    let min_depth = 0;
+    let mut progress = vec![0 as usize];
+    expand_tree(
+        &mut init_position,
+        &mut progress,
+        min_depth,
+        max_depth,
+        White,
+    );
+    println!("|{:?}| - {:?}", progress, init_position.children.len());
+
     for position in init_position.children {
         println!("{}", position);
     }
