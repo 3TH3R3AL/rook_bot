@@ -1,4 +1,5 @@
 use core::{panic, time};
+use std::cmp::min;
 use std::convert::From;
 use std::ops::Not;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -346,7 +347,7 @@ impl BoardPosition {
         BoardPosition {
             board,
             ..Default::default()
-        } 
+        }
     }
     fn get_piece(&self, square: &CoordinateSet) -> &Piece {
         debug_assert!(
@@ -370,9 +371,9 @@ impl BoardPosition {
             "clear_square out of bounds: {:?}",
             square
         );
-        self.set_piece(square, Piece::new(White, Empty));
+        self.set_piece(square, Piece::new(Black, Empty));
     }
-    fn append_child(&mut self,mut new_child: BoardPosition) {
+    fn append_child(&mut self, mut new_child: BoardPosition) {
         new_child.base_white_eval = new_child.eval(White);
         self.children.push(new_child);
     }
@@ -387,14 +388,20 @@ impl BoardPosition {
             })
         })
     }
-    fn tree_eval(&self,color_moving){
-        if(self.children.is_empty()){
-           return match color_moving {
+    /// How good the position is for color_moving (higher is better) ///
+    fn tree_eval(&self, color_moving: Color) -> i32 {
+        if self.children.is_empty() {
+            return match color_moving {
                 White => self.base_white_eval,
                 Black => -self.base_white_eval,
-            } 
+            };
         }
+        // Best case scenario for moving is worst case for adversary, so minimum and then flip
+        -self.children.iter().fold(-1000000, |acc, position| {
+            min(position.tree_eval(!color_moving), acc)
+        })
     }
+
     fn move_arbitrary(&self, start: &CoordinateSet, end: &CoordinateSet) -> BoardPosition {
         debug_assert!(
             !start.out_of_bounds(),
@@ -523,8 +530,9 @@ impl BoardPosition {
                 board.en_passante = Some(destination);
                 self.append_child(board);
             }
-            Standard | CaptureOnly | NoCapture => self
-                .append_child(self.move_arbitrary(coords, &destination)),
+            Standard | CaptureOnly | NoCapture => {
+                self.append_child(self.move_arbitrary(coords, &destination))
+            }
             Repeat => self.move_repeat(coords, &move_to_eval.1, 1),
             // May want to consider pulling some of this into another function
             Castle => {
@@ -739,6 +747,7 @@ enum MessageToBot {
     Stop,
     Move(Board),
 }
+#[derive(Debug)]
 enum MessageToMain {
     Error(String),
     Move(Board),
@@ -759,6 +768,9 @@ fn run_bot(
         match bot_in.try_recv() {
             Ok(message) => match message {
                 MessageToBot::Move(board) => {
+                    // let move_index = position.children.iter().position(|a| {
+                    //     a.board.iter().zip(board).fold(true||)
+                    // });
                     let move_index = position.children.iter().position(|a| a.board == board);
                     match move_index {
                         None => {
@@ -768,6 +780,23 @@ fn run_bot(
                         }
                         Some(index) => {
                             position = position.children.remove(index);
+                            position
+                                .children
+                                .iter_mut()
+                                .for_each(|child| child.tree_eval = child.tree_eval(!bot_color));
+
+                            let (move_correct, _) = position.children.iter().enumerate().fold(
+                                (0 as usize, 100000),
+                                |current, new| {
+                                    if new.1.tree_eval < current.1 {
+                                        (new.0, new.1.tree_eval)
+                                    } else {
+                                        current
+                                    }
+                                },
+                            );
+                            position = position.children.swap_remove(move_correct);
+                            bot_out.send(MessageToMain::Move(position.board)).unwrap();
                         }
                     }
                 }
@@ -819,8 +848,28 @@ fn main() {
     let (bot_out, main_in) = mpsc::channel();
 
     let bot =
-        thread::spawn(move || run_bot(bot_out, bot_in, init_position.board.clone(), White, White));
+        thread::spawn(move || run_bot(bot_out, bot_in, init_position.board.clone(), Black, White));
     sleep(time::Duration::from_millis(1000));
+
+    #[rustfmt::skip]
+    let after_move = BoardPosition::from([
+        [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
+        [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
+        [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+        [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+        [(Black,Empty),(Black,Empty),(Black,Empty),(White,Pawn),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+        [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+        [(White,Pawn),(White,Pawn),(White,Pawn),(Black,Empty),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
+        [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
+    ]);
+    println!("Attempting to move {}", after_move);
+    main_out.send(MessageToBot::Move(after_move.board)).unwrap();
+
+    let bot_move = BoardPosition {
+        board: main_in.recv().unwrap(),
+        ..Default::default()
+    };
+    println!("{}", bot_move);
     println!("stopping bot");
     main_out.send(MessageToBot::Stop).unwrap();
     bot.join().unwrap();
