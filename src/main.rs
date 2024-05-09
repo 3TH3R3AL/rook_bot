@@ -41,6 +41,17 @@ impl PieceType {
         [Knight, Bishop, Rook { has_moved: true }, Queen]
     }
 }
+#[rustfmt::skip]
+const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
+    [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
+    [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
+    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    [(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
+    [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
+];
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CoordinateSet {
     x: i32,
@@ -120,6 +131,8 @@ struct BoardPosition {
     board: Board,
     en_passante: Option<CoordinateSet>,
     children: Vec<BoardPosition>,
+    base_white_eval: i32,
+    tree_eval: i32,
 }
 #[derive(Debug, PartialEq, Eq)]
 enum MoveType {
@@ -307,23 +320,33 @@ impl fmt::Display for Piece {
         write!(f, "{}", self.character())
     }
 }
-impl From<[[(Color, PieceType); 8]; 8]> for BoardPosition {
-    fn from(item: [[(Color, PieceType); 8]; 8]) -> BoardPosition {
+impl Default for BoardPosition {
+    fn default() -> Self {
         BoardPosition {
-            board: item.map(|row| row.map(|cell| Piece::new(cell.0, cell.1))),
+            board: INITIAL_BOARD.map(|row| row.map(|cell| Piece::new(cell.0, cell.1))),
+            tree_eval: 0,
             en_passante: None,
+            base_white_eval: 0,
             children: Vec::new(),
         }
     }
 }
+impl From<[[(Color, PieceType); 8]; 8]> for BoardPosition {
+    fn from(item: [[(Color, PieceType); 8]; 8]) -> BoardPosition {
+        BoardPosition {
+            board: item.map(|row| row.map(|cell| Piece::new(cell.0, cell.1))),
+            ..Default::default()
+        }
+    }
+}
 type Board = [[Piece; 8]; 8];
+
 impl BoardPosition {
     fn new(board: Board) -> BoardPosition {
         BoardPosition {
             board,
-            en_passante: None,
-            children: Vec::new(),
-        }
+            ..Default::default()
+        } 
     }
     fn get_piece(&self, square: &CoordinateSet) -> &Piece {
         debug_assert!(
@@ -349,7 +372,29 @@ impl BoardPosition {
         );
         self.set_piece(square, Piece::new(White, Empty));
     }
-
+    fn append_child(&mut self,mut new_child: BoardPosition) {
+        new_child.base_white_eval = new_child.eval(White);
+        self.children.push(new_child);
+    }
+    fn eval(&self, color_moving: Color) -> i32 {
+        self.board.iter().fold(0, |acc, row| {
+            acc + row.iter().fold(0, |acc, piece| {
+                if piece.color == color_moving {
+                    acc + piece.point_value()
+                } else {
+                    acc + piece.point_value()
+                }
+            })
+        })
+    }
+    fn tree_eval(&self,color_moving){
+        if(self.children.is_empty()){
+           return match color_moving {
+                White => self.base_white_eval,
+                Black => -self.base_white_eval,
+            } 
+        }
+    }
     fn move_arbitrary(&self, start: &CoordinateSet, end: &CoordinateSet) -> BoardPosition {
         debug_assert!(
             !start.out_of_bounds(),
@@ -372,12 +417,15 @@ impl BoardPosition {
     fn move_repeat(&mut self, start: &CoordinateSet, direction: &Direction, repeat: i32) {
         let piece = self.get_piece(start);
         let destination = start + direction * repeat;
+        if destination.out_of_bounds() {
+            return;
+        }
         let target = self.get_piece(&destination);
         if (!target.is_empty() && target.color == piece.color) || destination.out_of_bounds() {
             return;
         }
         let to_add = self.move_arbitrary(&start, &destination);
-        self.children.push(to_add);
+        self.append_child(to_add);
         if self.get_piece(&destination).piece_type != Empty {
             return;
         }
@@ -388,7 +436,7 @@ impl BoardPosition {
     //     match to_add {
     //         None => (),
     //         Some(position) => {
-    //             self.children.push(position);
+    //             self.append_child(position);
     //         }
     //     }
     // }
@@ -405,8 +453,7 @@ impl BoardPosition {
                 return;
             }
         } else {
-            if let NoCapture | PawnFirst | Promotion = move_to_eval.0 {
-                println!("test");
+            if let EnPassante | NoCapture | PawnFirst | Promotion = move_to_eval.0 {
                 return;
             }
             if target.color == piece.color {
@@ -420,27 +467,39 @@ impl BoardPosition {
                 Some(enp_coords) => {
                     let mut target_pawn = destination.clone();
                     target_pawn.y -= piece.forward();
+                    // Make sure target is available for en passante
                     if *enp_coords != target_pawn {
-                        ()
+                        return;
                     }
+
+                    // This should be guaranteed by capture checking
                     debug_assert!(
                         self.get_piece(&destination).is_empty(),
                         "BAD En Passante Target Is Not Empty at {:?}",
                         enp_coords
                     );
+                    // Should be guaranteed, but make sure
                     debug_assert!(
                         *self.get_piece(&target_pawn)
-                            != Piece {
+                            == Piece {
                                 piece_type: Pawn,
-                                color: piece.color
+                                color: !piece.color,
                             },
-                        "BAD En Passante Coords Do Not Point To Proper Piece, Point To {:?}",
-                        *self.get_piece(&target_pawn)
+                        "BAD En Passante Coords {:?} when moving {:?} Do Not Point To Proper Piece, Point To {:?} when it should be {:?}\nScenario:\n{}",
+                        target_pawn,
+                        coords,
+                        Piece {
+                            piece_type: Pawn,
+                            color: !piece.color,
+                        },
+                        *self.get_piece(&target_pawn),
+                        self
                     );
                     let mut board = self.move_arbitrary(coords, &destination);
                     board.set_piece(coords, *piece);
                     board.clear_square(&target_pawn);
                     board.clear_square(&coords);
+                    self.append_child(board);
                 }
             },
             PawnFirst => {
@@ -462,11 +521,10 @@ impl BoardPosition {
                 } // Not moving through other piece
                 let mut board = self.move_arbitrary(coords, &destination);
                 board.en_passante = Some(destination);
-                self.children.push(board);
+                self.append_child(board);
             }
             Standard | CaptureOnly | NoCapture => self
-                .children
-                .push(self.move_arbitrary(coords, &destination)),
+                .append_child(self.move_arbitrary(coords, &destination)),
             Repeat => self.move_repeat(coords, &move_to_eval.1, 1),
             // May want to consider pulling some of this into another function
             Castle => {
@@ -529,7 +587,7 @@ impl BoardPosition {
                 let mut final_board = self.move_arbitrary(coords, &destination);
                 final_board.set_piece(&mid_point, *rook);
                 final_board.clear_square(&rook_pos);
-                self.children.push(final_board);
+                self.append_child(final_board);
             }
 
             Promotion | PromotionCapture => {
@@ -545,7 +603,7 @@ impl BoardPosition {
                     let mut new_board = BoardPosition::new(self.board.clone());
                     new_board.clear_square(coords);
                     new_board.set_piece(&destination, Piece { piece_type, color });
-                    self.children.push(new_board);
+                    self.append_child(new_board);
                 }
             }
         }
@@ -634,11 +692,6 @@ impl fmt::Display for BoardPosition {
         )
     }
 }
-#[derive(Clone, Copy)]
-enum BotMessage {
-    Stop,
-    Move(Board),
-}
 
 fn expand_tree(
     root: &mut BoardPosition,
@@ -649,29 +702,30 @@ fn expand_tree(
 ) {
     let depth = progress.len();
     if depth > max_depth {
+        // This is so that the bot doesn't infinite loop if it's gone to max depth
+        println!("Bot surpassed maximum");
         sleep(time::Duration::from_millis(100));
         return;
     }
     let mut current: &mut BoardPosition = root;
-    for i in 0..progress.len() - 1 {
+    if progress[min_depth] == 1 {
+        progress.fill(0);
+        progress.push(0);
+        return expand_tree(root, progress, min_depth, max_depth, initial_turn);
+    }
+    for i in min_depth + 1..progress.len() {
         let p = progress[i];
-        debug_assert!(current.children.len() <= p);
+        debug_assert!(p <= current.children.len());
+
         if current.children.len() == p {
-            println!("adding");
-            if i == min_depth {
-                for j in i..progress.len() {
-                    progress[j] = 0 as usize;
-                }
-                progress.push(0);
-                return expand_tree(root, progress, min_depth, max_depth, initial_turn);
-            }
-            progress[p] = 0;
-            progress[p - 1] += 1;
+            progress[i] = 0;
+            progress[i - 1] += 1;
             return expand_tree(root, progress, min_depth, max_depth, initial_turn);
         }
 
         current = &mut current.children[p];
     }
+    println!("evaled {:?}", progress);
     current.eval_moves(if depth % 2 == 1 {
         initial_turn
     } else {
@@ -680,27 +734,55 @@ fn expand_tree(
     progress[depth - 1] += 1;
 }
 
+#[derive(Clone, Copy)]
+enum MessageToBot {
+    Stop,
+    Move(Board),
+}
+enum MessageToMain {
+    Error(String),
+    Move(Board),
+}
+
 fn run_bot(
-    bot_out: Sender<Board>,
-    bot_in: Receiver<BotMessage>,
+    bot_out: Sender<MessageToMain>,
+    bot_in: Receiver<MessageToBot>,
     initial_position: Board,
     bot_color: Color,
     initial_turn: Color,
 ) {
     let mut position = BoardPosition::new(initial_position);
     let min_depth = 0;
-    let max_depth = 4;
-    let mut depth = vec![0];
+    let max_depth = 5;
+    let mut progress = vec![0];
     loop {
         match bot_in.try_recv() {
             Ok(message) => match message {
-                BotMessage::Move(board) => {}
-                BotMessage::Stop => {
-                    break;
+                MessageToBot::Move(board) => {
+                    let move_index = position.children.iter().position(|a| a.board == board);
+                    match move_index {
+                        None => {
+                            bot_out
+                                .send(MessageToMain::Error(String::from("Illegal Move")))
+                                .unwrap();
+                        }
+                        Some(index) => {
+                            position = position.children.remove(index);
+                        }
+                    }
+                }
+                MessageToBot::Stop => {
+                    return;
                 }
             },
             Err(e) => match e {
-                mpsc::TryRecvError::Empty => {}
+                mpsc::TryRecvError::Empty => expand_tree(
+                    &mut position,
+                    &mut progress,
+                    min_depth,
+                    max_depth,
+                    initial_turn,
+                ),
                 mpsc::TryRecvError::Disconnected => {
                     break;
                 }
@@ -709,17 +791,6 @@ fn run_bot(
     }
 }
 
-#[rustfmt::skip]
-const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
-    [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
-    [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
-    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-    [(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
-    [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
-];
 // const INITIAL_BOARD: [[(Color,PieceType); 8]; 8] = [
 //     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,King { has_moved: false}),(Black,Empty),(Black,Empty),(Black,Empty)],
 //     [(White,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
@@ -744,25 +815,13 @@ fn main() {
         }
     };
 
-    // let (main_out, bot_in) = mpsc::channel();
-    // let (bot_out, main_in) = mpsc::channel();
-    //
-    // let bot =
-    //     thread::spawn(move || run_bot(bot_out, bot_in, init_position.board.clone(), White, White));
+    let (main_out, bot_in) = mpsc::channel();
+    let (bot_out, main_in) = mpsc::channel();
 
-    let max_depth = 4;
-    let min_depth = 0;
-    let mut progress = vec![0 as usize];
-    expand_tree(
-        &mut init_position,
-        &mut progress,
-        min_depth,
-        max_depth,
-        White,
-    );
-    println!("|{:?}| - {:?}", progress, init_position.children.len());
-
-    for position in init_position.children {
-        println!("{}", position);
-    }
+    let bot =
+        thread::spawn(move || run_bot(bot_out, bot_in, init_position.board.clone(), White, White));
+    sleep(time::Duration::from_millis(1000));
+    println!("stopping bot");
+    main_out.send(MessageToBot::Stop).unwrap();
+    bot.join().unwrap();
 }
