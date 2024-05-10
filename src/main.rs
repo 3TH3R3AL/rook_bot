@@ -1,6 +1,7 @@
 use core::{panic, time};
 use std::cmp::min;
 use std::convert::From;
+use std::io::stdin;
 use std::ops::Not;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, sleep};
@@ -58,7 +59,12 @@ struct CoordinateSet {
     x: i32,
     y: i32,
 }
-#[derive(Debug)]
+impl CoordinateSet {
+    fn new(x: i32, y: i32) -> Self {
+        CoordinateSet { x, y }
+    }
+}
+#[derive(Debug, Clone)]
 struct Direction {
     x: i32,
     y: i32,
@@ -635,30 +641,71 @@ impl BoardPosition {
         }
     }
 
-    fn get_legal_moves(&mut self, player_color: Color) -> Vec<ChessMove> {
+    fn get_legal_moves_piece(&mut self, target: &CoordinateSet) -> Vec<ChessMove> {
+        debug_assert!(!target.out_of_bounds());
         let mut moves: Vec<ChessMove> = Vec::new();
-        for i in 0..self.board.len() {
-            for j in 0..self.board[i].len() {
-                let target = CoordinateSet {
-                    x: j as i32,
-                    y: i as i32,
-                };
-                let piece = self.get_piece(&target);
-                if piece.color != player_color || piece.piece_type == Empty {
-                    continue;
-                }
+        let piece = self.get_piece(&target);
+        debug_assert!(piece.piece_type != Empty);
 
-                let potential_moves = self.board[i][j].get_moves();
-                for potential_move in potential_moves {
-                    let current_length = self.children.len();
-                    self.eval_move(&target, &potential_move);
-                    if self.children.len() > current_length {
-                        moves.push(potential_move);
-                    }
-                }
+        let potential_moves = self.get_piece(&target).get_moves();
+        for potential_move in potential_moves {
+            let current_length = self.children.len();
+            self.eval_move(&target, &potential_move);
+            if self.children.len() > current_length {
+                moves.push(potential_move);
             }
         }
         moves
+    }
+
+    fn display_with_moves(&mut self, piece: &CoordinateSet) {
+        debug_assert!(
+            !piece.out_of_bounds(),
+            "Error: {:?} is out of bounds in display_with_moves",
+            piece
+        );
+        let moves = self.get_legal_moves_piece(piece);
+        let mut move_squares = [[0; 8]; 8];
+        moves.into_iter().for_each(|chess_move| {
+            let coords = piece.clone() + chess_move.1;
+            move_squares[coords.y as usize][coords.x as usize] = 1;
+        });
+        let board_string = self
+            .board
+            .iter()
+            .enumerate()
+            .fold(String::new(), |str, (i, row)| {
+                format!(
+                    "{}{} {}\x1b[40m\n",
+                    str,
+                    i,
+                    row.iter()
+                        .enumerate()
+                        .fold(String::new(), |str, (j, piece)| {
+                            format!(
+                                "{}{} {} ",
+                                str,
+                                if move_squares[i][j] == 1 {
+                                    "\x1b[42m"
+                                } else if (j + i) % 2 == 0 {
+                                    "\x1b[40m"
+                                } else {
+                                    "\x1b[41m"
+                                },
+                                piece.character()
+                            )
+                        }),
+                )
+            });
+        println!(
+            "   0  1  2  3  4  5  6  7\n{}En Passante: {}",
+            board_string,
+            if self.en_passante.is_none() {
+                "No Eligible Pawns"
+            } else {
+                "Pawn Eligible"
+            }
+        )
     }
 }
 
@@ -670,8 +717,9 @@ impl fmt::Display for BoardPosition {
             .enumerate()
             .fold(String::new(), |str, (i, row)| {
                 format!(
-                    "{}{}\x1b[40m\n",
+                    "{}{} {}\x1b[40m\n",
                     str,
+                    i,
                     row.iter()
                         .enumerate()
                         .fold(String::new(), |str, (j, piece)| {
@@ -690,7 +738,7 @@ impl fmt::Display for BoardPosition {
             });
         write!(
             f,
-            "{}En Passante: {}",
+            "   0  1  2  3  4  5  6  7\n{}En Passante: {}",
             board_string,
             if self.en_passante.is_none() {
                 "No Eligible Pawns"
@@ -733,7 +781,6 @@ fn expand_tree(
 
         current = &mut current.children[p];
     }
-    println!("evaled {:?}", progress);
     current.eval_moves(if depth % 2 == 1 {
         initial_turn
     } else {
@@ -780,6 +827,7 @@ fn run_bot(
                         }
                         Some(index) => {
                             position = position.children.remove(index);
+                            progress.remove(0);
                             position
                                 .children
                                 .iter_mut()
@@ -796,6 +844,7 @@ fn run_bot(
                                 },
                             );
                             position = position.children.swap_remove(move_correct);
+                            progress.remove(0);
                             bot_out.send(MessageToMain::Move(position.board)).unwrap();
                         }
                     }
@@ -813,7 +862,7 @@ fn run_bot(
                     initial_turn,
                 ),
                 mpsc::TryRecvError::Disconnected => {
-                    break;
+                    return;
                 }
             },
         }
@@ -830,6 +879,66 @@ fn run_bot(
 //     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
 //     [(White,Rook { has_moved: false }),(Black,Empty),(Black,Empty),(White,Empty),(White,King { has_moved: false }),(White,Empty),(White,Empty),(White,Rook { has_moved: false })],
 // ];
+
+fn command_line_ui(
+    main_in: Receiver<MessageToMain>,
+    main_out: Sender<MessageToBot>,
+    mut current_position: BoardPosition,
+) {
+    loop {
+        println!("{}", current_position);
+        println!("Please enter X coordinate of desired piece: ",);
+        let mut input = String::new();
+        stdin().read_line(&mut input).expect("Failed to read line");
+        let x: i32 = match input.trim().parse() {
+            Ok(num) => num,
+            Err(_) => {
+                println!("That's not a valid integer!");
+                return;
+            }
+        };
+        println!("Please enter Y coordinate of desired piece: ",);
+        input = String::new();
+        stdin().read_line(&mut input).expect("Failed to read line");
+        let y: i32 = match input.trim().parse() {
+            Ok(num) => num,
+            Err(_) => {
+                println!("That's not a valid integer!");
+                return;
+            }
+        };
+        let piece = CoordinateSet::new(x, y);
+        current_position.display_with_moves(&piece);
+
+        println!("Please enter X coordinate of desired move: ",);
+        let x: i32 = match input.trim().parse() {
+            Ok(num) => num,
+            Err(_) => {
+                println!("That's not a valid integer!");
+                return;
+            }
+        };
+        println!("Please enter Y coordinate of desired move: ",);
+        input = String::new();
+        stdin().read_line(&mut input).expect("Failed to read line");
+        let y: i32 = match input.trim().parse() {
+            Ok(num) => num,
+            Err(_) => {
+                println!("That's not a valid integer!");
+                return;
+            }
+        };
+        let moves = current_position.get_legal_moves_piece(&piece);
+        current_position.children.clear();
+
+        let target = CoordinateSet::new(x, y);
+        let chess_move = moves.into_iter().find(|chess_move| {
+            let coords = piece.clone() + chess_move.1.clone();
+            coords == target
+        });
+    }
+    main_out.send(MessageToBot::Stop).unwrap();
+}
 
 fn main() {
     let mut init_position = match BOTTOM_SIDE {
@@ -849,28 +958,32 @@ fn main() {
 
     let bot =
         thread::spawn(move || run_bot(bot_out, bot_in, init_position.board.clone(), Black, White));
-    sleep(time::Duration::from_millis(1000));
 
-    #[rustfmt::skip]
-    let after_move = BoardPosition::from([
-        [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
-        [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
-        [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-        [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-        [(Black,Empty),(Black,Empty),(Black,Empty),(White,Pawn),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-        [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
-        [(White,Pawn),(White,Pawn),(White,Pawn),(Black,Empty),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
-        [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
-    ]);
-    println!("Attempting to move {}", after_move);
-    main_out.send(MessageToBot::Move(after_move.board)).unwrap();
-
-    let bot_move = BoardPosition {
-        board: main_in.recv().unwrap(),
-        ..Default::default()
-    };
-    println!("{}", bot_move);
+    command_line_ui(main_in, main_out, init_position);
+    // #[rustfmt::skip]
+    // let after_move = BoardPosition::from([
+    //     [(Black,Rook { has_moved: false }),(Black,Knight),(Black,Bishop),(Black,Queen),(Black,King { has_moved: false }),(Black,Bishop),(Black,Knight),(Black,Rook { has_moved: false })],
+    //     [(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn),(Black,Pawn)],
+    //     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    //     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    //     [(Black,Empty),(Black,Empty),(Black,Empty),(White,Pawn),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    //     [(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty),(Black,Empty)],
+    //     [(White,Pawn),(White,Pawn),(White,Pawn),(Black,Empty),(White,Pawn),(White,Pawn),(White,Pawn),(White,Pawn)],
+    //     [(White,Rook { has_moved: false }),(White,Knight),(White,Bishop),(White,Queen),(White,King { has_moved: false }),(White,Bishop),(White,Knight),(White,Rook { has_moved: false })],
+    // ]);
+    // println!("Attempting to move {}", after_move);
+    // main_out.send(MessageToBot::Move(after_move.board)).unwrap();
+    // let bot_message = main_in.recv().unwrap();
+    // match bot_message {
+    //     MessageToMain::Move(board) => {
+    //         let bot_move = BoardPosition {
+    //             board,
+    //             ..Default::default()
+    //         };
+    //         println!("{}", bot_move);
+    //     }
+    //     _ => {}
+    // }
     println!("stopping bot");
-    main_out.send(MessageToBot::Stop).unwrap();
     bot.join().unwrap();
 }
