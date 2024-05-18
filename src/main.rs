@@ -1,12 +1,12 @@
-use core::cmp::min;
-use core::convert::From;
-use core::ops::Not;
-use core::{fmt, usize};
 use core::{panic, time};
-use instant::Instant;
+use std::cmp::min;
+use std::convert::From;
 use std::io::stdin;
+use std::ops::Not;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, sleep};
+use std::time::Instant;
+use std::{fmt, usize};
 use PieceType::*;
 
 #[allow(dead_code)]
