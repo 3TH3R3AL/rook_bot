@@ -1,12 +1,12 @@
+use core::cmp::min;
+use core::convert::From;
+use core::ops::Not;
+use core::{fmt, usize};
 use core::{panic, time};
-use std::cmp::min;
-use std::convert::From;
+use instant::Instant;
 use std::io::stdin;
-use std::ops::Not;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, sleep};
-use std::time::Instant;
-use std::{fmt, usize};
 use PieceType::*;
 
 #[allow(dead_code)]
@@ -734,6 +734,25 @@ impl BoardPosition {
             }
         )
     }
+    fn move_piece(
+        &mut self,
+        from: CoordinateSet,
+        to: CoordinateSet,
+    ) -> Result<BoardPosition, String> {
+        let moves = self.get_legal_moves_piece(&from);
+        let potential_move = moves.into_iter().find(|chess_move| {
+            let coords = from.clone() + chess_move.1.clone();
+            coords == to
+        });
+        match potential_move {
+            Some(chosen_move) => {
+                self.children.clear();
+                self.eval_move(&from, &chosen_move);
+                Ok(self.children.remove(0))
+            }
+            None => Err(String::from("Illegal Move, try again")),
+        }
+    }
 }
 
 impl fmt::Display for BoardPosition {
@@ -865,18 +884,19 @@ fn run_bot(
                                 .iter_mut()
                                 .for_each(|child| child.tree_eval = child.tree_eval(!bot_color));
 
-                            let (move_correct, _) = position.children.iter().enumerate().fold(
-                                (0 as usize, 100000),
-                                |current, new| {
+                            let (move_correct, current_eval) = position
+                                .children
+                                .iter()
+                                .enumerate()
+                                .fold((0 as usize, 100000), |current, new| {
                                     if new.1.tree_eval < current.1 {
                                         (new.0, new.1.tree_eval)
                                     } else {
-                                        println!("{}", new.1.tree_eval);
                                         current
                                     }
-                                },
-                            );
+                                });
 
+                            println!("Current Eval: {}", current_eval);
                             position = position.children.swap_remove(move_correct);
                             let current_progress = progress.remove(0);
                             if current_progress != index {
@@ -1052,6 +1072,8 @@ async fn graphical_ui(
     player_color: PieceColor,
     mut current_position: BoardPosition,
 ) {
+    let mut dragging_piece: Option<(CoordinateSet, Piece)> = None;
+    let mut mouse_offset = vec2(0.0, 0.0);
     loop {
         let square_size: f32 = (min(screen_width() as i32, screen_height() as i32) as f32
             - PADDING_SIZE * 2.0)
@@ -1072,11 +1094,17 @@ async fn graphical_ui(
                     color,
                 );
                 let piece = current_position.get_piece(&CoordinateSet::new(i, j));
-                let mut base_path = String::from("../assets/")
-                let texture = Texture2D::from_file_with_format(
-                    include_bytes!(String:("../assets/", piece.image_file_name())),
-                    Some(ImageFormat::Png),
-                );
+                if piece.piece_type == Empty {
+                    continue;
+                }
+                let mut base_path = String::from("assets/");
+                base_path.push_str(&piece.image_file_name());
+                let texture = load_texture(&base_path).await.unwrap();
+                if let Some((drag_coord, _)) = &dragging_piece {
+                    if drag_coord.x == i && drag_coord.y == j {
+                        continue;
+                    }
+                }
                 draw_texture_ex(
                     &texture,
                     PADDING_SIZE + (i as f32 * square_size),
@@ -1089,6 +1117,87 @@ async fn graphical_ui(
                 );
             }
         }
+        if let Some((from, piece)) = &dragging_piece {
+            let mut base_path = String::from("assets/");
+            base_path.push_str(&piece.image_file_name());
+            let texture = load_texture(&base_path).await.unwrap();
+            let mouse_position = mouse_position();
+            draw_texture_ex(
+                &texture,
+                mouse_position.0 + mouse_offset.x - square_size / 2.0,
+                mouse_position.1 + mouse_offset.y - square_size / 2.0,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(square_size, square_size)),
+                    ..Default::default()
+                },
+            );
+            let moves = current_position.get_legal_moves_piece(from);
+            let circle_color = color_u8!(100, 100, 100, 100);
+            for chess_move in moves {
+                let target = from + chess_move.1;
+                draw_circle(
+                    (target.x as f32 + 0.5) * square_size + PADDING_SIZE,
+                    (target.y as f32 + 0.5) * square_size + PADDING_SIZE,
+                    square_size / 6.0,
+                    circle_color,
+                );
+            }
+        }
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let mouse_position = mouse_position();
+            let i = ((mouse_position.0 - PADDING_SIZE) / square_size).floor() as i32;
+            let j = ((mouse_position.1 - PADDING_SIZE) / square_size).floor() as i32;
+            if i >= 0 && i < BOARD_SIZE && j >= 0 && j < BOARD_SIZE {
+                let coord = CoordinateSet::new(i, j);
+                let piece = current_position.get_piece(&coord);
+                if piece.piece_type != Empty {
+                    dragging_piece = Some((coord, *piece));
+                    mouse_offset = vec2(
+                        (mouse_position.0 - PADDING_SIZE) % square_size - square_size / 2.0,
+                        (mouse_position.1 - PADDING_SIZE) % square_size - square_size / 2.0,
+                    );
+                }
+            }
+        }
+
+        if is_mouse_button_released(MouseButton::Left) {
+            if let Some((from, piece)) = dragging_piece.take() {
+                let mouse_position = mouse_position();
+                let i = ((mouse_position.0 - PADDING_SIZE) / square_size).floor() as i32;
+                let j = ((mouse_position.1 - PADDING_SIZE) / square_size).floor() as i32;
+                if i >= 0 && i < BOARD_SIZE && j >= 0 && j < BOARD_SIZE {
+                    let to = CoordinateSet::new(i, j);
+                    match current_position.move_piece(from, to) {
+                        Ok(new_board) => {
+                            current_position = new_board;
+
+                            main_out
+                                .send(MessageToBot::Move(current_position.board))
+                                .unwrap();
+                            let incoming = main_in.recv();
+                            match incoming {
+                                Ok(message) => match message {
+                                    MessageToMain::Move(new_position) => {
+                                        current_position = new_position;
+                                    }
+                                    MessageToMain::Error(e) => {
+                                        println!("Bot received ERROR:\n{}", e);
+                                        break;
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("Bot failed to receive:\n{}", e);
+                                    break;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         next_frame().await;
     }
 
