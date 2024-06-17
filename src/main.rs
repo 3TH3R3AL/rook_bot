@@ -201,7 +201,7 @@ impl Piece {
                     NoCapture,
                     Direction {
                         x: 0,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
                 ChessMove(
@@ -215,49 +215,49 @@ impl Piece {
                     CaptureOnly,
                     Direction {
                         x: 1,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
                 ChessMove(
                     CaptureOnly,
                     Direction {
                         x: -1,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
                 ChessMove(
                     EnPassante,
                     Direction {
                         x: 1,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
                 ChessMove(
                     EnPassante,
                     Direction {
                         x: -1,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
                 ChessMove(
                     Promotion,
                     Direction {
                         x: 0,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
                 ChessMove(
                     PromotionCapture,
                     Direction {
                         x: 1,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
                 ChessMove(
                     PromotionCapture,
                     Direction {
                         x: -1,
-                        y: 1 * self.forward(),
+                        y: self.forward(),
                     },
                 ),
             ],
@@ -455,12 +455,12 @@ impl BoardPosition {
         if (!target.is_empty() && target.color == piece.color) || destination.out_of_bounds() {
             return;
         }
-        let to_add = self.move_arbitrary(&start, &destination);
+        let to_add = self.move_arbitrary(start, &destination);
         self.append_child(to_add);
         if self.get_piece(&destination).piece_type != Empty {
             return;
         }
-        self.move_repeat(start, &direction, repeat + 1)
+        self.move_repeat(start, direction, repeat + 1)
     }
 
     // fn push_if_exists(&mut self, to_add: Option<BoardPosition>) {
