@@ -685,7 +685,7 @@ impl BoardPosition {
         moves
     }
 
-    fn display_with_moves(&mut self, piece: &CoordinateSet) {
+    fn _display_with_moves(&mut self, piece: &CoordinateSet) {
         debug_assert!(
             !piece.out_of_bounds(),
             "Error: {:?} is out of bounds in display_with_moves",
@@ -836,6 +836,7 @@ fn expand_tree(
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum MessageToBot {
     Stop,
     Move(Board),
@@ -955,7 +956,7 @@ fn run_bot(
 //     [(PieceColor::Black,Empty),(PieceColor::Black,Empty),(PieceColor::Black,Empty),(PieceColor::Black,Empty),(PieceColor::Black,Empty),(PieceColor::Black,Empty),(PieceColor::Black,Empty),(PieceColor::Black,Empty)],
 //     [(PieceColor::White,Rook { has_moved: false }),(PieceColor::Black,Empty),(PieceColor::Black,Empty),(PieceColor::White,Empty),(PieceColor::White,King { has_moved: false }),(PieceColor::White,Empty),(PieceColor::White,Empty),(PieceColor::White,Rook { has_moved: false })],
 // ];
-fn convert_notation_to_coords(notation: String) -> Result<CoordinateSet, String> {
+fn _convert_notation_to_coords(notation: String) -> Result<CoordinateSet, String> {
     let notation = String::from(notation.trim());
     let mut chars = notation.chars();
 
@@ -986,7 +987,7 @@ fn convert_notation_to_coords(notation: String) -> Result<CoordinateSet, String>
 
     Ok(CoordinateSet::new(x, y))
 }
-fn command_line_ui(
+fn _command_line_ui(
     main_in: Receiver<MessageToMain>,
     main_out: Sender<MessageToBot>,
     player_color: PieceColor,
@@ -998,7 +999,7 @@ fn command_line_ui(
         let mut input = String::new();
         stdin().read_line(&mut input).expect("Failed to read line");
 
-        let piece_coords = match convert_notation_to_coords(input) {
+        let piece_coords = match _convert_notation_to_coords(input) {
             Ok(num) => num,
             Err(e) => {
                 println!("{}", e);
@@ -1011,12 +1012,12 @@ fn command_line_ui(
             println!("You don't have a piece there");
             continue;
         }
-        current_position.display_with_moves(&piece_coords);
+        current_position._display_with_moves(&piece_coords);
 
         println!("Please enter desired move: ",);
         input = String::new();
         stdin().read_line(&mut input).expect("Failed to read line");
-        let target = match convert_notation_to_coords(input) {
+        let target = match _convert_notation_to_coords(input) {
             Ok(num) => num,
             Err(e) => {
                 println!("{}", e);
@@ -1151,7 +1152,7 @@ async fn graphical_ui(
             if i >= 0 && i < BOARD_SIZE && j >= 0 && j < BOARD_SIZE {
                 let coord = CoordinateSet::new(i, j);
                 let piece = current_position.get_piece(&coord);
-                if piece.piece_type != Empty {
+                if piece.piece_type != Empty && piece.color == player_color {
                     dragging_piece = Some((coord, *piece));
                     mouse_offset = vec2(
                         (mouse_position.0 - PADDING_SIZE) % square_size - square_size / 2.0,
@@ -1162,7 +1163,7 @@ async fn graphical_ui(
         }
 
         if is_mouse_button_released(MouseButton::Left) {
-            if let Some((from, piece)) = dragging_piece.take() {
+            if let Some((from, _piece)) = dragging_piece.take() {
                 let mouse_position = mouse_position();
                 let i = ((mouse_position.0 - PADDING_SIZE) / square_size).floor() as i32;
                 let j = ((mouse_position.1 - PADDING_SIZE) / square_size).floor() as i32;
@@ -1206,7 +1207,7 @@ async fn graphical_ui(
 
 #[macroquad::main("BasicShapes")]
 async fn main() {
-    let mut init_position = match BOTTOM_SIDE {
+    let init_position = match BOTTOM_SIDE {
         PieceColor::White => BoardPosition::from(INITIAL_BOARD),
         PieceColor::Black => {
             let mut half_reverse = INITIAL_BOARD.map(|mut row| {
