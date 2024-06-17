@@ -437,7 +437,7 @@ impl BoardPosition {
             "end in move_arbitrary out of bounds: {:?}",
             end
         );
-        let mut new_board = BoardPosition::new(self.board.clone());
+        let mut new_board = BoardPosition::new(self.board);
         let mut new_piece = *self.get_piece(start);
         new_piece.set_moved();
         new_board.set_piece(end, new_piece);
@@ -529,7 +529,7 @@ impl BoardPosition {
                     let mut board = self.move_arbitrary(coords, &destination);
                     board.set_piece(coords, *piece);
                     board.clear_square(&target_pawn);
-                    board.clear_square(&coords);
+                    board.clear_square(coords);
                     self.append_child(board);
                 }
             },
@@ -632,7 +632,7 @@ impl BoardPosition {
                 }
                 let color = piece.color;
                 for piece_type in PieceType::to_promote() {
-                    let mut new_board = BoardPosition::new(self.board.clone());
+                    let mut new_board = BoardPosition::new(self.board);
                     new_board.clear_square(coords);
                     new_board.set_piece(&destination, Piece { piece_type, color });
                     self.append_child(new_board);
@@ -654,7 +654,7 @@ impl BoardPosition {
                 self.board[i][j]
                     .get_moves()
                     .iter()
-                    .for_each(|move_to_eval| self.eval_move(&target, &move_to_eval));
+                    .for_each(|move_to_eval| self.eval_move(&target, move_to_eval));
             }
         }
     }
@@ -662,13 +662,13 @@ impl BoardPosition {
     fn get_legal_moves_piece(&mut self, target: &CoordinateSet) -> Vec<ChessMove> {
         debug_assert!(!target.out_of_bounds());
         let mut moves: Vec<ChessMove> = Vec::new();
-        let piece = self.get_piece(&target);
+        let piece = self.get_piece(target);
         debug_assert!(piece.piece_type != Empty);
 
-        let potential_moves = self.get_piece(&target).get_moves();
+        let potential_moves = self.get_piece(target).get_moves();
         for potential_move in potential_moves {
             let old_length = self.children.len();
-            self.eval_move(&target, &potential_move);
+            self.eval_move(target, &potential_move);
             if self.children.len() > old_length {
                 if potential_move.0 == Repeat {
                     for i in old_length..self.children.len() {
@@ -889,7 +889,7 @@ fn run_bot(
                                 .children
                                 .iter()
                                 .enumerate()
-                                .fold((0 as usize, 100000), |current, new| {
+                                .fold((0_usize, 100000), |current, new| {
                                     if new.1.tree_eval < current.1 {
                                         (new.0, new.1.tree_eval)
                                     } else {
@@ -906,7 +906,7 @@ fn run_bot(
                             bot_out
                                 .send(MessageToMain::Move(BoardPosition {
                                     children: Vec::new(),
-                                    board: position.board.clone(),
+                                    board: position.board,
                                     en_passante: position.en_passante.clone(),
                                     ..position
                                 }))
@@ -960,7 +960,7 @@ fn _convert_notation_to_coords(notation: String) -> Result<CoordinateSet, String
     let notation = String::from(notation.trim());
     let mut chars = notation.chars();
 
-    let x_chars = vec!['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    let x_chars = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
     let x: i32 = match chars.next() {
         Some(char) => match x_chars.iter().position(|&c| char == c) {
             Some(index) => index as i32,
@@ -1149,7 +1149,7 @@ async fn graphical_ui(
             let mouse_position = mouse_position();
             let i = ((mouse_position.0 - PADDING_SIZE) / square_size).floor() as i32;
             let j = ((mouse_position.1 - PADDING_SIZE) / square_size).floor() as i32;
-            if i >= 0 && i < BOARD_SIZE && j >= 0 && j < BOARD_SIZE {
+            if (0..BOARD_SIZE).contains(&i) && (0..BOARD_SIZE).contains(&j) {
                 let coord = CoordinateSet::new(i, j);
                 let piece = current_position.get_piece(&coord);
                 if piece.piece_type != Empty && piece.color == player_color {
@@ -1167,33 +1167,30 @@ async fn graphical_ui(
                 let mouse_position = mouse_position();
                 let i = ((mouse_position.0 - PADDING_SIZE) / square_size).floor() as i32;
                 let j = ((mouse_position.1 - PADDING_SIZE) / square_size).floor() as i32;
-                if i >= 0 && i < BOARD_SIZE && j >= 0 && j < BOARD_SIZE {
+                if (0..BOARD_SIZE).contains(&i) && (0..BOARD_SIZE).contains(&j) {
                     let to = CoordinateSet::new(i, j);
-                    match current_position.move_piece(from, to) {
-                        Ok(new_board) => {
-                            current_position = new_board;
+                    if let Ok(new_board) = current_position.move_piece(from, to) {
+                        current_position = new_board;
 
-                            main_out
-                                .send(MessageToBot::Move(current_position.board))
-                                .unwrap();
-                            let incoming = main_in.recv();
-                            match incoming {
-                                Ok(message) => match message {
-                                    MessageToMain::Move(new_position) => {
-                                        current_position = new_position;
-                                    }
-                                    MessageToMain::Error(e) => {
-                                        println!("Bot received ERROR:\n{}", e);
-                                        break;
-                                    }
-                                },
-                                Err(e) => {
-                                    println!("Bot failed to receive:\n{}", e);
+                        main_out
+                            .send(MessageToBot::Move(current_position.board))
+                            .unwrap();
+                        let incoming = main_in.recv();
+                        match incoming {
+                            Ok(message) => match message {
+                                MessageToMain::Move(new_position) => {
+                                    current_position = new_position;
+                                }
+                                MessageToMain::Error(e) => {
+                                    println!("Bot received ERROR:\n{}", e);
                                     break;
                                 }
+                            },
+                            Err(e) => {
+                                println!("Bot failed to receive:\n{}", e);
+                                break;
                             }
                         }
-                        _ => {}
                     }
                 }
             }
@@ -1227,7 +1224,7 @@ async fn main() {
         run_bot(
             bot_out,
             bot_in,
-            init_position.board.clone(),
+            init_position.board,
             PieceColor::Black,
             PieceColor::White,
         )
